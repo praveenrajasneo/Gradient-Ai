@@ -1,7 +1,7 @@
 # Gradient Nova AI
 
-An evidence-based workplace intelligence project. Currently at Checkpoint 1:
-project setup and a minimal FastAPI backend.
+An evidence-based workplace intelligence project. Checkpoint 2 adds a validated
+input echo endpoint, the fixed workplace taxonomy, and a standalone HN collector.
 
 Repository: https://github.com/praveenrajasneo/Gradient-Ai (branch `main`).
 The local project directory is named `gradient-nova-ai`.
@@ -17,7 +17,7 @@ The local project directory is named `gradient-nova-ai`.
   state when evidence is insufficient. Community opinions are not verified facts.
 
 Bluesky, GDELT, SEBI, other sources, and advanced AI features are later work.
-No collection or AI logic is implemented at this checkpoint.
+Collection runs separately from the API. No classification or AI logic is implemented.
 
 ## Run the backend on Windows
 
@@ -61,4 +61,76 @@ Press Ctrl+C in the server terminal to stop it.
 - OpenAPI schema identifies Gradient Nova AI and the GET `/` endpoint.
 - Backend remains running for manual inspection.
 
-Stop here before implementing additional endpoints or the Hacker News collector.
+## Input endpoint
+
+`POST /api/analyze` validates and echoes this request. It does not collect data.
+
+```json
+{
+  "company": "Microsoft",
+  "role": "Senior Software Engineer",
+  "experience": 10,
+  "location": "India"
+}
+```
+
+Company and role must not be blank; experience must be a nonnegative JSON integer.
+Location is optional and defaults to null. Try the endpoint in Swagger UI.
+The eight fixed category identifiers are in `backend/app/classifiers/workplace_aspects.py`.
+
+## Collect Hacker News candidates
+
+From the project directory:
+
+```powershell
+cd backend
+.\venv\Scripts\python.exe app\collectors\hacker_news.py
+```
+
+Or, after activating the virtual environment, from `backend/app/collectors`:
+
+```powershell
+python hacker_news.py
+```
+
+Default: Microsoft, up to 200 unique items. To customize:
+
+```powershell
+.\venv\Scripts\python.exe app\collectors\hacker_news.py --company "Microsoft" --limit 300
+```
+
+Output: `data/raw/hacker_news_microsoft.json`, resolved relative to the project,
+independent of the terminal's current directory. A successful rerun replaces that
+company's snapshot. Failed collection leaves the previous snapshot unchanged.
+Raw files are ignored by Git.
+
+The collector uses the [HN Algolia search API](https://hn.algolia.com/api),
+searching stories and comments separately for the company name and the suffixes
+employees, layoffs, management, and promotion. It samples results across these
+queries, removes repeated HN IDs, and stops at the requested count, exhausted
+results, or five pages per query/type. Each page contains up to 30 hits.
+The limit is a maximum, not a guarantee of that many available documents.
+
+The JSON includes queries, collection time, actual counts, stop reason, and items.
+Each item retains its HN link, item type, observed matching queries, and untouched
+Algolia hit under `raw`, including HTML text, author, date, and thread metadata
+where available. Comments are search matches, not complete discussion threads.
+External linked articles are not fetched. Candidate matches may be irrelevant;
+they have not been filtered for workplace relevance, role, or experience.
+
+## Tests
+
+From `backend`:
+
+```powershell
+.\venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+New-Item -ItemType Directory -Path .pytest-tmp -Force | Out-Null
+$env:PYTEST_DEBUG_TEMPROOT = (Resolve-Path .pytest-tmp).Path
+.\venv\Scripts\python.exe -m pytest -q
+```
+
+Tests use mocked search responses; the collector command above verifies live access.
+The local temporary directory avoids an existing Windows system-temp permission issue.
+
+Checkpoint 2 stops at real raw candidate documents; cleaning, sentiment, pain-point
+extraction, and RAG remain future work.
