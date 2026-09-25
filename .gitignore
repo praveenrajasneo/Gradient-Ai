@@ -1,0 +1,27 @@
+# Local settings and credentials
+.env
+.env.*
+!.env.example
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Frontend
+node_modules/
+dist/
+
+# Runtime files and collected data
+*.log
+*.pid
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+
+# Operating system files
+.DS_Store
+Thumbs.db
