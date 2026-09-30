@@ -45,3 +45,13 @@ CREATE TABLE IF NOT EXISTS aspects (
     FOREIGN KEY (document_id, company_id) REFERENCES documents(id, company_id)
 );
 CREATE INDEX IF NOT EXISTS aspects_analysis_sentiment ON aspects(analysis_id, sentiment);
+
+CREATE TABLE IF NOT EXISTS analysis_documents (
+    analysis_id UUID NOT NULL REFERENCES analyses(id),
+    document_id UUID NOT NULL,
+    company_id BIGINT NOT NULL,
+    role TEXT,
+    snapshot JSONB NOT NULL,
+    PRIMARY KEY(analysis_id, document_id, company_id),
+    FOREIGN KEY(document_id, company_id) REFERENCES documents(id, company_id)
+);

@@ -1,7 +1,7 @@
 # Gradient Nova AI
 
-An evidence-based workplace intelligence project. Checkpoint 4 adds multi-label
-aspects, aspect-based sentiment, Qwen pain-point extraction, and PostgreSQL storage.
+An evidence-based workplace intelligence project. Checkpoint 5 adds deterministic
+statistics, BGE-M3 and BM25 retrieval, BGE reranking, and Qwen answers with citations.
 
 Repository: https://github.com/praveenrajasneo/Gradient-Ai (branch `main`).
 The local project directory is named `gradient-nova-ai`.
@@ -19,7 +19,8 @@ The local project directory is named `gradient-nova-ai`.
 Bluesky, GDELT, SEBI, other sources, and advanced AI features are later work.
 Collection and relevance classification run separately from the echo API.
 The echo endpoint remains available; structured pain extraction has its own endpoint.
-Retrieval, final reports, and RAG remain future work.
+Semantic search and normal RAG have separate endpoints. Agentic workflows and
+polished final reports remain future work.
 
 ## Run the backend on Windows
 
@@ -52,8 +53,9 @@ Press Ctrl+C in the server terminal to stop it.
 
 ## Structure
 
-`backend/app/` contains the entry point and reserved module folders. `frontend/`,
-`data/`, `notebooks/`, and `docker/` are placeholders for later steps.
+`backend/app/` contains the API and processing pipeline. `data/` stores local
+source and processed files; `docker/` contains Qdrant configuration. `frontend/`
+and `notebooks/` remain placeholders.
 `.env` is local and ignored by Git; `.env.example` is safe to commit.
 
 ## Checkpoint 1 acceptance
@@ -323,3 +325,131 @@ model mistakes must not be presented as confirmed facts about the company.
 
 To include the PostgreSQL integration test, set `$env:RUN_DB_TESTS = '1'` before
 running pytest. It uses and removes only a temporary test schema.
+
+## Checkpoint 5: statistics and normal RAG
+
+Statistics come from Python and PostgreSQL. BGE-M3 embeds overlapping passages,
+Qdrant stores vectors and source metadata, BM25 provides keyword matching, and
+reciprocal rank fusion combines the rankings. The best passage from each of up
+to 50 distinct documents goes through BGE Reranker Base; the top 10 passages go
+through a weak-match cutoff and a Qwen answerability check before Qwen3 4B writes
+a cited answer. No LangGraph or additional sources are involved.
+
+### Set up once
+
+From the repository root, with Docker Desktop running:
+
+```powershell
+docker compose -f docker/compose.yml up -d
+cd backend
+.\venv\Scripts\python.exe -m pip install -r requirements-rag.txt
+.\venv\Scripts\python.exe -m app.embeddings.download embedding
+.\venv\Scripts\python.exe -m app.embeddings.download reranker
+.\venv\Scripts\python.exe -m app.database.setup --local
+.\venv\Scripts\python.exe -m app.pain_points.pipeline --stage store
+.\venv\Scripts\python.exe -m app.retrieval.pipeline index --company Microsoft
+```
+
+The two model downloads total approximately 3.4 GB, use pinned revisions, resume
+completed ranges, and verify weight-file SHA-256 hashes. Model files, index
+caches, credentials, and collected documents remain local and ignored by Git.
+Do not start two downloads of the same model simultaneously.
+
+Storage adds `analysis_documents` snapshots so every analysis includes its exact
+documents, including those with no detected aspects. The storage command above
+backfills snapshots from the completed Checkpoint 4 report without rerunning AI.
+Changing a corpus, analysis, or embedding configuration requires building its
+index again. Reindexing the same snapshot reuses embeddings and upserts the same
+point IDs; it does not double-count documents. Qdrant data survives container
+restarts in a named Docker volume.
+
+### Inspect statistics and evidence
+
+Run these from `backend`:
+
+```powershell
+.\venv\Scripts\python.exe -m app.database.statistics --company Microsoft
+.\venv\Scripts\python.exe -m app.retrieval.pipeline search --company Microsoft --mode dense
+.\venv\Scripts\python.exe -m app.retrieval.pipeline search --company Microsoft --rerank
+.\venv\Scripts\python.exe -m app.rag.pipeline --company Microsoft --question "What promotion problems are reported at Microsoft?"
+```
+
+Search and RAG accept `--output <path>` to save JSON and `--analysis-id <uuid>` to
+select a particular completed run. Dense retrieval returns up to 20 distinct
+documents; reranking returns up to 10. Scores are ranking signals, not calibrated
+confidence or proof that a claim is true. The MVP searches all chunks in the
+selected small corpus before selecting candidates; larger corpora will need
+bounded candidate retrieval and a persistent keyword index.
+
+Swagger at <http://localhost:8000/docs> exposes:
+
+- `GET /api/companies/Microsoft/statistics`
+- `POST /api/retrieve` with `company`, `question`, optional `mode` (`dense` or
+  `hybrid`), `top_k` (1–20), `rerank`, and `analysis_id`.
+- `POST /api/ask` with `company`, `question`, and optional `analysis_id`.
+
+Example request for `/api/ask`:
+
+```json
+{
+  "company": "Microsoft",
+  "question": "What promotion problems are reported at Microsoft?"
+}
+```
+
+The answer contains observations with evidence IDs and exact quotes; `sources`
+maps those IDs to stored URLs, document IDs, dates, and passages. The server
+rejects missing citations, invented quotes, and community evidence labeled as
+official. It retries invalid output once, then returns a validation error.
+Insufficient evidence is an explicit response, including an empty observations
+list when appropriate. A separate structured Qwen check asks for passages
+that directly answer the question; no selected passages means no answer is
+generated. `RAG_MIN_RERANKER_SCORE` defaults to -5.0 (a raw ranking logit, not a
+probability). This initial cutoff and the model's answerability decisions need
+evaluation on labeled questions; neither guarantees relevance.
+Citation checks do not establish semantic entailment:
+review whether each quote supports its statement and the requested company.
+
+### Local operation and limitations
+
+After a restart, start Docker Desktop and Ollama, start the project PostgreSQL
+cluster using the setup command above, then run the FastAPI command from
+Checkpoint 1. Qdrant listens only on localhost port 6333. PostgreSQL remains on
+5433; the original password-protected server is unchanged.
+
+This machine has limited RAM. Each BGE job runs in a separate process, with one
+model at a time, CPU float16 inference, and batch size one. Retrieval unloads
+Qwen before loading BGE; Qwen unloads after answering. API model requests are
+serialized. Run one API server worker, and avoid running CLI model jobs while an
+API model request is active. Cold requests can take minutes. No smaller model
+silently substitutes for BGE-M3 or the BGE reranker.
+
+Both BGE models use their supported Hugging Face Transformers implementation
+(normalized CLS vectors for BGE-M3). Sentence Transformers is unnecessary here;
+its optional scikit-learn DLL was blocked by this machine's Windows Application
+Control policy. That dependency was removed without changing security settings.
+Query vectors are cached locally by question and embedding revision.
+
+Role metadata is null when a source does not establish a role; the user's role
+is not copied onto every document. Role-specific questions are text queries,
+not proof of role attribution. All current evidence is unverified Hacker News
+community content and may be old. Counts describe the collected, model-labeled
+sample, not the company's workforce. Positive and negative document totals can
+overlap because one document may discuss different aspects; mixed sentiment is
+reported separately. Percentages always come from deterministic code.
+
+Run regression and local service checks from `backend`:
+
+```powershell
+New-Item -ItemType Directory -Force .pytest-tmp | Out-Null
+$env:PYTEST_DEBUG_TEMPROOT = (Resolve-Path '.pytest-tmp').Path
+$env:RUN_DB_TESTS = '1'
+$env:RUN_QDRANT_TESTS = '1'
+.\venv\Scripts\python.exe -m pytest -q
+```
+
+Model references: [BGE-M3](https://huggingface.co/BAAI/bge-m3),
+[BGE Reranker Base](https://huggingface.co/BAAI/bge-reranker-base).
+
+See the [Checkpoint 5 validation report](docs/checkpoint5.md) for the local sample
+counts, live checks, and observed limitations.

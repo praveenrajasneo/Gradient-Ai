@@ -163,6 +163,15 @@ def test_postgres_idempotence_and_rollback(monkeypatch):
             first = repository.store_report(report)
             assert first == repository.store_report(report)
             assert first[1] == [{'aspect': 'promotion', 'negative_documents': 1}]
+            from app.database import corpus
+            monkeypatch.setattr(corpus, 'database_url', lambda: url)
+            run_id, snapshots = corpus.load_corpus('Test company')
+            assert run_id == str(first[0])
+            assert len(snapshots) == 1 and snapshots[0]['role'] is None
+            assert snapshots[0]['text'] == document['text']
+            assert snapshots[0]['aspects'][0]['aspect'] == 'promotion'
+            with pytest.raises(LookupError):
+                corpus.load_corpus('Other company', run_id)
             report['documents'][0]['aspects'][0]['evidence'][0]['text'] = 'invented quote'
             with pytest.raises(ValueError):
                 repository.store_report(report)

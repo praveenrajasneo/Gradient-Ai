@@ -32,6 +32,7 @@ def store_report(report: dict) -> tuple[str, list[dict]]:
             (analysis_id, company_id, report["input_hash"], Jsonb(stored_config)))
         # Repeating exactly the same run replaces its observations atomically.
         connection.execute("DELETE FROM aspects WHERE analysis_id=%s", (analysis_id,))
+        connection.execute("DELETE FROM analysis_documents WHERE analysis_id=%s", (analysis_id,))
         for document, item in zip(documents, report["documents"]):
             connection.execute("INSERT INTO sources(name,source_type) VALUES (%s,%s) ON CONFLICT DO NOTHING",
                                (document.source, document.source_type))
@@ -44,6 +45,9 @@ def store_report(report: dict) -> tuple[str, list[dict]]:
                 (document.document_id, company_id, document.source, document.source_type,
                  document.title, document.text, str(document.url), document.author,
                  document.published_at, document.collected_at))
+            connection.execute(
+                'INSERT INTO analysis_documents(analysis_id,document_id,company_id,snapshot) VALUES (%s,%s,%s,%s)',
+                (analysis_id, document.document_id, company_id, Jsonb(document.model_dump(mode='json'))))
             for aspect in item["aspects"]:
                 TypeAdapter(Aspect).validate_python(aspect["aspect"])
                 TypeAdapter(Sentiment).validate_python(aspect["sentiment"])

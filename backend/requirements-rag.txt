@@ -1,0 +1,5 @@
+-r requirements-ml.txt
+# Direct Hugging Face Transformers (in requirements-ml) supplies both BGE models.
+# Sentence Transformers/scikit-learn are not required for CLS embeddings.
+rank-bm25==0.2.2
+# Qdrant uses its REST API through httpx (already in requirements.txt).
