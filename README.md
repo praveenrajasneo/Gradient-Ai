@@ -1,7 +1,7 @@
 # Gradient Nova AI
 
-An evidence-based workplace intelligence project. Checkpoint 3 adds a common
-document schema, preprocessing, duplicate detection, and local workplace relevance.
+An evidence-based workplace intelligence project. Checkpoint 4 adds multi-label
+aspects, aspect-based sentiment, Qwen pain-point extraction, and PostgreSQL storage.
 
 Repository: https://github.com/praveenrajasneo/Gradient-Ai (branch `main`).
 The local project directory is named `gradient-nova-ai`.
@@ -18,7 +18,8 @@ The local project directory is named `gradient-nova-ai`.
 
 Bluesky, GDELT, SEBI, other sources, and advanced AI features are later work.
 Collection and relevance classification run separately from the echo API.
-Sentiment, aspect classification, pain-point extraction, and RAG are future work.
+The echo endpoint remains available; structured pain extraction has its own endpoint.
+Retrieval, final reports, and RAG remain future work.
 
 ## Run the backend on Windows
 
@@ -196,6 +197,129 @@ does not prove that the text refers to the requested company or role.
 
 All raw/processed outputs are ignored by Git. Below-threshold documents remain in
 `cleaned.json` with decisions in `audit.json` for later review. The API still only
-echoes input and does not load the model. Stop here before sentiment analysis.
+echoes input and does not load the model.
 
 Model reference: [MiniLM NLI model card](https://huggingface.co/cross-encoder/nli-MiniLM2-L6-H768).
+
+## Checkpoint 4: aspect intelligence and PostgreSQL
+
+From `backend`, install `requirements-ml.txt`. MiniLM uses independent multi-label
+scores for the eight fixed aspects. Evidence is split into clauses to separate
+contrasting statements, with overlapping short spans for long text. Each matched
+span is passed with an aspect target to the dedicated Hugging Face
+`yangheng/deberta-v3-base-absa-v1.1` sentiment model. Positive and negative evidence
+for the same document/aspect is preserved as `mixed`, rather than averaged away.
+
+The sentiment model has about 738 MB of weights. If the default Hugging Face
+download stalls, this verified direct download also works:
+
+```powershell
+.\venv\Scripts\python.exe -m app.sentiment.download
+```
+
+It saves the pinned checkpoint under ignored `.local/models/`. Pipeline stages
+release their Hugging Face model before loading the next model to conserve RAM.
+
+Start Ollama and install the requested local LLM:
+
+```powershell
+ollama serve
+# In another terminal:
+ollama pull qwen3:4b
+ollama run qwen3:4b
+```
+
+Ollama defaults to localhost:11434. Qwen receives only negative evidence spans for
+structured pain-point extraction. It returns a concise issue plus an exact quote.
+JSON schema, taxonomy, sentiment, and quote membership are validated. An invalid
+response receives one corrective retry. Failed batches are retried one evidence
+span at a time. Persistently invalid quotes are excluded and recorded in
+`extraction_rejections` for review. They never enter stored pain points.
+Malformed structured output still fails the stage. Quote matching is not a
+semantic entailment guarantee; generated labels still need human evaluation.
+Qwen does not calculate counts, sentiment, or aspect classification.
+
+`POST /api/pain-points/extract` connects FastAPI to the same service. Example body:
+
+```json
+{"aspect":"promotion","text":"The promotion process is not transparent and nobody knows what is required."}
+```
+
+The response contains `pain_points` and a separate `rejections` audit list, with `aspect`, `sentiment`, `pain_point`, and
+`evidence_quote` on each item. An empty list means no clear complaint was extracted.
+Use Swagger at http://localhost:8000/docs. Ollama failures return HTTP 503;
+malformed structured output returns HTTP 502. Rejected quotes are returned in the
+separate audit list and are never accepted pain points.
+
+### Development database
+
+The existing PostgreSQL server on port 5432 is not modified. This project uses an
+isolated development cluster on **127.0.0.1:5433**, with database `gradient_nova`.
+Its files live in ignored `.local/postgres/`; a generated password is stored only
+in ignored `.env`. Do not delete that file or the cluster to restart the app.
+
+```powershell
+.\venv\Scripts\python.exe -m app.database.setup --local
+```
+
+This starts the existing project cluster after a reboot, or creates it on first
+use. It uses the installed PostgreSQL 18 binaries; override `POSTGRES_BIN` for
+another location. The project uses psycopg's Python wrapper with the installed
+Windows libpq library. The local role owns this development cluster; production
+will need a separate least-privilege app role and deployment configuration.
+
+Alternatively, configure `DATABASE_ADMIN_URL` and `DATABASE_URL` in `.env` for your
+own PostgreSQL server, then run setup without `--local`. No password is logged.
+Tables: `companies`, `documents`, `aspects`, `analyses`, `sources`.
+
+### Run and inspect
+
+Continue from Checkpoint 3's saved `relevant.json`:
+
+```powershell
+.\venv\Scripts\python.exe -m app.pain_points.pipeline
+.\venv\Scripts\python.exe -m app.database.query
+```
+
+Or run stages separately:
+
+```powershell
+.\venv\Scripts\python.exe -m app.pain_points.pipeline --stage classify
+.\venv\Scripts\python.exe -m app.pain_points.pipeline --stage extract
+.\venv\Scripts\python.exe -m app.pain_points.pipeline --stage store
+```
+
+Extraction saves progress after each document, so rerun `--stage extract` to
+resume after a failure. `--input` accepts another company's relevance output;
+`--output` overrides the intelligence JSON path. Each report must contain exactly
+one company. No sentiment or pain-point stage fetches new raw data.
+
+All model results, evidence, model revisions, and Qwen digest are saved locally in
+`intelligence.json` beside `relevant.json`. PostgreSQL writes occur in one
+transaction after extraction completes. Rerunning storage for the same input and
+configuration replaces the same analysis observations without inflating counts.
+
+Count one observation per document/aspect within one completed analysis:
+
+```sql
+SELECT aspect, COUNT(*)
+FROM aspects
+WHERE sentiment = 'negative'
+  AND analysis_id = (
+    SELECT id FROM analyses WHERE status = 'completed'
+    ORDER BY completed_at DESC LIMIT 1
+  )
+GROUP BY aspect;
+```
+
+The query excludes `mixed` rows; inspect their evidence separately to see both
+positive and negative experiences. Include a specific analysis ID for comparisons:
+`python -m app.database.query --analysis-id <uuid>`. Unscoped counts across all
+analyses would double-count documents across different model runs.
+
+Aspect and sentiment confidence are uncalibrated model outputs, not evidence
+strength. Company/role attribution is still unverified. Candidate matches and
+model mistakes must not be presented as confirmed facts about the company.
+
+To include the PostgreSQL integration test, set `$env:RUN_DB_TESTS = '1'` before
+running pytest. It uses and removes only a temporary test schema.

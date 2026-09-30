@@ -1,4 +1,4 @@
-"""Fixed Version 1 taxonomy. Classification is not implemented yet."""
+"""Fixed Version 1 taxonomy; classification lives in aspects.py."""
 
 WORKPLACE_ASPECTS = [
     "workload",

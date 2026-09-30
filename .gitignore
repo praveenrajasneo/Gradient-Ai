@@ -10,6 +10,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .pytest-tmp/
+.local/
 
 # Frontend
 node_modules/
